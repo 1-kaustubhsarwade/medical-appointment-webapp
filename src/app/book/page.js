@@ -130,6 +130,103 @@ export default function BookAppointmentPage() {
       } catch (err) {
         console.error('[BookPage] Error loading doctors:', err)
         setDoctors([])
+        // If a specialization is selected, fetch doctors for that specialization
+        if (selectedSpecialization) {
+          const { data, error: fetchError } = await getDoctorsBySpecialization(selectedSpecialization)
+
+          if (fetchError) {
+            // If the fetch was aborted, ignore the error (navigation/unmount)
+            if (fetchError?.name === 'AbortError' || String(fetchError).includes('signal is aborted')) {
+              return
+            }
+            logError('Failed to load doctors from database', fetchError)
+            throw new Error('Unable to load doctor list')
+          }
+
+          if (data && data.length > 0) {
+            setDoctors(data)
+          } else {
+            setDoctors([])
+          }
+        } else {
+          // Use the dedicated db utility which has proper RLS setup
+          const { data, error: fetchError } = await getDoctors()
+
+          if (fetchError) {
+            // If the fetch was aborted, ignore the error (navigation/unmount)
+            if (fetchError?.name === 'AbortError' || String(fetchError).includes('signal is aborted')) {
+              return
+            }
+            logError('Failed to load doctors from database', fetchError)
+            throw new Error('Unable to load doctor list')
+          }
+
+          if (data && data.length > 0) {
+            setDoctors(data)
+          } else {
+            // Fallback: use mock doctors
+            console.warn('No doctors found in database, using mock data')
+            setDoctors([
+              {
+                id: 'mock-1',
+                full_name: 'Dr. Sarah Johnson',
+                specialization: 'Cardiology',
+                experience_years: 10,
+                consultation_fee: 150,
+                rating: 4.8
+              },
+              {
+                id: 'mock-2',
+                full_name: 'Dr. Michael Chen',
+                specialization: 'Neurology',
+                experience_years: 15,
+                consultation_fee: 160,
+                rating: 4.9
+              },
+              {
+                id: 'mock-3',
+                full_name: 'Dr. Emily Davis',
+                specialization: 'Dermatology',
+                experience_years: 8,
+                consultation_fee: 200,
+                rating: 4.7
+              }
+            ])
+          }
+        }
+      } catch (err) {
+        // Ignore abort errors (component unmounted / route change)
+        if (err?.name === 'AbortError' || String(err).includes('signal is aborted')) {
+          return
+        }
+        // Use mock doctors as fallback
+        console.warn('Using fallback mock doctors:', getErrorMessage(err))
+        setDoctors([
+          {
+            id: 'mock-1',
+            full_name: 'Dr. Sarah Johnson',
+            specialization: 'Cardiology',
+            experience_years: 10,
+            consultation_fee: 150,
+            rating: 4.8
+          },
+          {
+            id: 'mock-2',
+            full_name: 'Dr. Michael Chen',
+            specialization: 'Neurology',
+            experience_years: 15,
+            consultation_fee: 160,
+            rating: 4.9
+          },
+          {
+            id: 'mock-3',
+            full_name: 'Dr. Emily Davis',
+            specialization: 'Dermatology',
+            experience_years: 8,
+            consultation_fee: 200,
+            rating: 4.7
+          }
+        ])
       } finally {
         setLoadingDoctors(false)
       }
@@ -357,6 +454,7 @@ export default function BookAppointmentPage() {
                       value={guestName}
                       onChange={(e) => setGuestName(e.target.value)}
                       placeholder="Type Your Name"
+                      placeholder="Enter Name"
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200  text-gray-900"
                       required
                     />

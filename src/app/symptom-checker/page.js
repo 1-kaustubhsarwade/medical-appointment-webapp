@@ -99,6 +99,8 @@ export default function SymptomCheckerPage() {
       {/* Navbar */}
       <nav className="flex justify-between items-center px-6 py-4 bg-transparent backdrop-blur-sm">
         <Link href="/book" className="text-xl font-bold text-white hover:text-teal-200 transition">
+      <nav className="flex justify-between items-center px-6 py-4 bg-slate-800/50 border-b border-slate-700">
+        <Link href="/book" className="text-xl font-bold text-blue-400">
           ← Dashboard
         </Link>
         <h1 className="text-xl font-bold text-shadow-blue-500">AI Symptom Checker</h1>
