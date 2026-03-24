@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { getSupabaseClient } from '@/lib/supabase/client'
-import { getAllAppointments, getAllUsers, getConflictLogs } from '@/lib/db'
+import RequireAuth from '@/components/RequireAuth'
 
 export default function AdminDashboardPage() {
   const supabase = getSupabaseClient()
   const [user, setUser] = useState(null)
+  const [accessToken, setAccessToken] = useState(null)
   const [appointments, setAppointments] = useState([])
   const [allUsers, setAllUsers] = useState([])
   const [conflictLogs, setConflictLogs] = useState([])
@@ -30,30 +31,36 @@ export default function AdminDashboardPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
         setUser(session.user)
+        setAccessToken(session.access_token)
 
-        const { data: appts } = await getAllAppointments()
-        setAppointments(appts || [])
-
-        const { data: users } = await getAllUsers()
-        setAllUsers(users || [])
-
-        const { data: logs } = await getConflictLogs()
-        setConflictLogs(logs || [])
-
-        // Calculate stats
-        if (appts && users && logs) {
-          const doctors = users.filter(u => u.role === 'doctor').length
-          const patients = users.filter(u => u.role === 'patient').length
-          
-          setStats({
-            totalUsers: users.length,
-            totalDoctors: doctors,
-            totalPatients: patients,
-            totalAppointments: appts.length,
-            pendingAppointments: appts.filter(a => a.status === 'pending').length,
-            confirmedAppointments: appts.filter(a => a.status === 'confirmed').length,
-            conflicts: logs.length
+        try {
+          const res = await fetch('/api/admin/data', {
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
           })
+
+          if (res.ok) {
+            const { users, appointments, conflicts } = await res.json()
+
+            setAllUsers(users || [])
+            setAppointments(appointments || [])
+            setConflictLogs(conflicts || [])
+
+            const appts = appointments || []
+            const allU = users || []
+            setStats({
+              totalUsers: allU.length,
+              totalDoctors: allU.filter(u => u.role === 'doctor').length,
+              totalPatients: allU.filter(u => u.role === 'patient').length,
+              totalAppointments: appts.length,
+              pendingAppointments: appts.filter(a => a.status === 'pending').length,
+              confirmedAppointments: appts.filter(a => a.status === 'confirmed').length,
+              conflicts: (conflicts || []).length,
+            })
+          } else {
+            console.error('[AdminDashboard] Failed to fetch admin data:', await res.text())
+          }
+        } catch (err) {
+          console.error('[AdminDashboard] Fetch error:', err)
         }
       }
       setLoading(false)
@@ -64,7 +71,7 @@ export default function AdminDashboardPage() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    window.location.href = '/'
+    window.location.replace('/login')
   }
 
   const getStatusColor = (status) => {
@@ -102,6 +109,7 @@ export default function AdminDashboardPage() {
   }
 
   return (
+    <RequireAuth>
     <div className="min-h-screen bg-slate-950 text-white relative overflow-hidden">
       {/* Ambient background */}
       <div className="pointer-events-none absolute inset-0 opacity-60">
@@ -116,12 +124,38 @@ export default function AdminDashboardPage() {
           <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">MediBook Admin</h1>
           <p className="text-xs md:text-sm text-gray-400">Administrator Panel</p>
         </div>
-        <button
-          onClick={handleLogout}
-          className="px-4 py-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 text-white font-semibold shadow-md hover:shadow-red-900/40 hover:brightness-110 transition-all duration-200"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={async () => {
+              if (!confirm('Delete your admin account? This will remove admin access and log you out.')) return
+              try {
+                const token = accessToken || (await supabase.auth.getSession()).data.session?.access_token
+                if (!token) throw new Error('Unable to confirm session')
+                const res = await fetch('/api/admin/delete-account', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${token}` }
+                })
+                const json = await res.json()
+                if (!res.ok) throw new Error(json.error || 'Failed to delete account')
+                // On success, redirect home
+                window.location.href = '/'
+              } catch (err) {
+                console.error('Admin delete error:', err)
+                alert('Failed to delete admin account: ' + (err.message || err))
+              }
+            }}
+            className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold shadow-md hover:brightness-105 transition-all duration-200"
+          >
+            Delete Account
+          </button>
+
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 rounded-lg bg-linear-to-r from-red-500 to-red-600 text-white font-semibold shadow-md hover:shadow-red-900/40 hover:brightness-110 transition-all duration-200"
+          >
+            Logout
+          </button>
+        </div>
       </nav>
 
       <div className="relative max-w-7xl mx-auto px-4 md:px-8 py-8">
@@ -134,7 +168,7 @@ export default function AdminDashboardPage() {
           </div>
           {user && (
             <div className="hidden md:flex items-center gap-3 rounded-full bg-slate-900/70 border border-slate-700 px-4 py-2 backdrop-blur">
-              <div className="h-8 w-8 rounded-full bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-xs font-bold">
+              <div className="h-8 w-8 rounded-full bg-linear-to-br from-teal-500 to-blue-500 flex items-center justify-center text-xs font-bold">
                 {user.email?.[0]?.toUpperCase() || 'A'}
               </div>
               <div className="text-xs">
@@ -147,8 +181,8 @@ export default function AdminDashboardPage() {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="group relative overflow-hidden rounded-2xl border border-blue-500/40 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-blue-900/10">
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-blue-500/10 to-teal-500/10" />
+          <div className="group relative overflow-hidden rounded-2xl border border-blue-500/40 bg-linear-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-blue-900/10">
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-linear-to-br from-blue-500/10 to-teal-500/10" />
             <div className="relative">
             <p className="text-gray-400 text-sm">Total Users</p>
             <p className="text-3xl font-bold text-white mt-1 group-hover:scale-105 transition-transform duration-150">
@@ -157,8 +191,8 @@ export default function AdminDashboardPage() {
             <p className="mt-2 text-xs text-blue-300/80">All registered roles in the system</p>
             </div>
           </div>
-          <div className="group relative overflow-hidden rounded-2xl border border-purple-500/40 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-purple-900/10">
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-purple-500/10 to-pink-500/10" />
+          <div className="group relative overflow-hidden rounded-2xl border border-purple-500/40 bg-linear-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-purple-900/10">
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-linear-to-br from-purple-500/10 to-pink-500/10" />
             <div className="relative">
             <p className="text-gray-400 text-sm">Doctors</p>
             <p className="text-3xl font-bold text-purple-200 mt-1 group-hover:scale-105 transition-transform duration-150">
@@ -167,8 +201,8 @@ export default function AdminDashboardPage() {
             <p className="mt-2 text-xs text-purple-200/80">Active verified doctors</p>
             </div>
           </div>
-          <div className="group relative overflow-hidden rounded-2xl border border-emerald-500/40 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-emerald-900/10">
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-emerald-500/10 to-teal-500/10" />
+          <div className="group relative overflow-hidden rounded-2xl border border-emerald-500/40 bg-linear-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-emerald-900/10">
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-linear-to-br from-emerald-500/10 to-teal-500/10" />
             <div className="relative">
             <p className="text-gray-400 text-sm">Patients</p>
             <p className="text-3xl font-bold text-emerald-200 mt-1 group-hover:scale-105 transition-transform duration-150">
@@ -177,8 +211,8 @@ export default function AdminDashboardPage() {
             <p className="mt-2 text-xs text-emerald-200/80">Registered patient profiles</p>
             </div>
           </div>
-          <div className="group relative overflow-hidden rounded-2xl border border-amber-500/40 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-amber-900/10">
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-amber-500/10 to-orange-500/10" />
+          <div className="group relative overflow-hidden rounded-2xl border border-amber-500/40 bg-linear-to-br from-slate-900/80 to-slate-900/40 p-4 shadow-lg shadow-amber-900/10">
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-linear-to-br from-amber-500/10 to-orange-500/10" />
             <div className="relative">
             <p className="text-gray-400 text-sm">Total Appointments</p>
             <p className="text-3xl font-bold text-amber-200 mt-1 group-hover:scale-105 transition-transform duration-150">
@@ -279,8 +313,8 @@ export default function AdminDashboardPage() {
                     className={`cursor-pointer transition-colors ${idx % 2 === 0 ? 'bg-slate-800/40' : 'bg-slate-900/40'} hover:bg-slate-700/60`}
                     onClick={() => setSelectedAppointment(apt)}
                   >
-                    <td className="px-6 py-4 text-white text-sm">{apt.doctor?.users_extended?.full_name}</td>
-                    <td className="px-6 py-4 text-gray-300 text-sm">{apt.patient?.users_extended?.full_name}</td>
+                    <td className="px-6 py-4 text-white text-sm">{apt.doctor_name || '—'}</td>
+                    <td className="px-6 py-4 text-gray-300 text-sm">{apt.patient_name || 'Guest'}</td>
                     <td className="px-6 py-4 text-gray-300 text-sm">{apt.appointment_date} {apt.appointment_time}</td>
                     <td className="px-6 py-4">
                       <span className={`px-3 py-1 rounded text-xs font-semibold ${getStatusColor(apt.status)}`}>
@@ -314,7 +348,7 @@ export default function AdminDashboardPage() {
                     onClick={() => setSelectedUser(u)}
                   >
                     <td className="px-6 py-4 text-white text-sm">{u.full_name}</td>
-                    <td className="px-6 py-4 text-gray-300 text-sm">ID: {u.id.slice(0, 8)}...</td>
+                    <td className="px-6 py-4 text-gray-300 text-sm">{u.email || `ID: ${u.id.slice(0, 8)}...`}</td>
                     <td className="px-6 py-4">
                       <span className={`px-3 py-1 rounded text-xs font-semibold ${getRoleColor(u.role)}`}>
                         {u.role.charAt(0).toUpperCase() + u.role.slice(1)}
@@ -374,8 +408,8 @@ export default function AdminDashboardPage() {
                 <>
                   <h3 className="text-xl font-semibold mb-4">Appointment Details</h3>
                   <div className="space-y-2 text-sm text-gray-200">
-                    <p><span className="font-semibold text-gray-300">Doctor:</span> {selectedAppointment.doctor?.users_extended?.full_name || 'N/A'}</p>
-                    <p><span className="font-semibold text-gray-300">Patient:</span> {selectedAppointment.patient?.users_extended?.full_name || 'Guest / N/A'}</p>
+                    <p><span className="font-semibold text-gray-300">Doctor:</span> {selectedAppointment.doctor_name || 'N/A'}</p>
+                    <p><span className="font-semibold text-gray-300">Patient:</span> {selectedAppointment.patient_name || 'Guest / N/A'}</p>
                     <p><span className="font-semibold text-gray-300">Date:</span> {selectedAppointment.appointment_date} {selectedAppointment.appointment_time}</p>
                     <p>
                       <span className="font-semibold text-gray-300">Status:</span>{' '}
@@ -405,6 +439,7 @@ export default function AdminDashboardPage() {
                   <h3 className="text-xl font-semibold mb-4">User Details</h3>
                   <div className="space-y-2 text-sm text-gray-200">
                     <p><span className="font-semibold text-gray-300">Name:</span> {selectedUser.full_name || 'N/A'}</p>
+                    <p><span className="font-semibold text-gray-300">Email:</span> {selectedUser.email || 'N/A'}</p>
                     <p><span className="font-semibold text-gray-300">User ID:</span> {selectedUser.id}</p>
                     <p>
                       <span className="font-semibold text-gray-300">Role:</span>{' '}
@@ -439,5 +474,7 @@ export default function AdminDashboardPage() {
         )}
       </div>
     </div>
+    </RequireAuth>
   )
 }
+

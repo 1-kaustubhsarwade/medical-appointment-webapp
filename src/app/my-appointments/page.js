@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { getPatientAppointments, cancelAppointment } from '@/lib/db'
+import RequireAuth from '@/components/RequireAuth'
 
 export default function MyAppointmentsPage() {
   const supabase = createClient()
@@ -57,6 +58,7 @@ export default function MyAppointmentsPage() {
   }
 
   return (
+    <RequireAuth>
     <div className="min-h-screen bg-linear-to-br from-slate-900 to-black">
       {/* Navbar */}
       <nav className="flex justify-between items-center px-6 py-4 bg-slate-800/50 border-b border-slate-700">
@@ -127,5 +129,7 @@ export default function MyAppointmentsPage() {
         )}
       </div>
     </div>
+    </RequireAuth>
   )
 }
+

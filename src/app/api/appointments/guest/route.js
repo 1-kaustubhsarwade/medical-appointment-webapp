@@ -12,6 +12,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey)
 export async function POST(request) {
   try {
     const body = await request.json()
+    console.log('[api/appointments/guest] POST body:', body)
     const { guestName, guestEmail, guestPhone, doctor_id, appointment_date, appointment_time, reason, consultation_mode } = body
 
     // Validate input
@@ -58,14 +59,13 @@ export async function POST(request) {
           doctor_id,
           appointment_date,
           appointment_time,
-          reason_for_visit: reason,
           status: 'pending',
-          consultation_mode: consultation_mode || 'in-person',
           notes: `Guest Booking\nName: ${guestName}\nEmail: ${guestEmail}\nPhone: ${guestPhone}\nReason: ${reason}`,
         },
       ])
       .select()
 
+    console.log('[api/appointments/guest] insert result:', { appointment, appointmentError })
     if (appointmentError) {
       console.error('Appointment insert error:', appointmentError)
       return Response.json({ error: appointmentError.message || 'Failed to book appointment' }, { status: 400 })
@@ -86,3 +86,4 @@ export async function POST(request) {
     return Response.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
+

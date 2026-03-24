@@ -19,22 +19,25 @@ export default function UserAvatar({ dashboardPath = '/dashboard' }) {
         const { data: auth } = await supabase.auth.getUser()
         if (!auth?.user) return
 
-        // Fetch extended profile (users_extended) for full name and role
+        // Fetch extended profile (users_extended) for full name only.
+        // Role may be stored in JWT user metadata; some DB schemas don't include a `role` column.
         const { data: profileData, error: profileError } = await supabase
           .from('users_extended')
-          .select('full_name, role')
+          .select('full_name')
           .eq('id', auth.user.id)
           .single()
-        
+
         if (profileError) {
-          logError('UserAvatar.fetchProfile', profileError)
+          // Don't treat a missing DB column as fatal for the avatar; fall back to metadata
+          console.warn('[UserAvatar] profile fetch warning (falling back to metadata):', profileError)
           setName(auth.user.email?.split('@')[0] || 'User')
-          setRole('')
+          const metaRole = auth.user.user_metadata?.role || ''
+          setRole(metaRole)
         } else if (profileData) {
           setName(profileData.full_name || auth.user.email?.split('@')[0] || 'User')
-          const fetchedRole = profileData.role || ''
-          setRole(fetchedRole)
-          console.log('[UserAvatar] Role loaded:', fetchedRole) // Debug log
+          const metaRole = auth.user.user_metadata?.role || ''
+          setRole(metaRole)
+          console.log('[UserAvatar] Role loaded (from metadata):', metaRole)
         }
       } catch (err) {
         logError('UserAvatar.fetchProfile - unexpected error', err)
@@ -50,14 +53,13 @@ export default function UserAvatar({ dashboardPath = '/dashboard' }) {
   const logout = async () => {
     setOpen(false)
     try {
-      const { error } = await supabase.auth.signOut()
-      if (error) {
-        logError('UserAvatar.logout', error)
-        return
-      }
-      router.replace('/')
+      await supabase.auth.signOut()
+      // Force instant redirect to login page
+      window.location.replace('/login')
     } catch (err) {
       logError('UserAvatar.logout - unexpected error', err)
+      // Still redirect even on error to ensure logout UX
+      window.location.replace('/login')
     }
   }
   const initial = (name && name.trim().charAt(0) && name.trim().charAt(0).toUpperCase()) || 'U'
@@ -83,7 +85,7 @@ export default function UserAvatar({ dashboardPath = '/dashboard' }) {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute right-0 mt-2 w-40 bg-gradient-to-br from-teal-600 to-blue-600 rounded-lg shadow-lg overflow-hidden z-50">
+        <div className="absolute right-0 mt-2 w-40 bg-linear-to-br from-teal-600 to-blue-600 rounded-lg shadow-lg overflow-hidden z-50">
           {roleLoaded && role === 'doctor' && (
             <button
               onClick={() => {
@@ -116,3 +118,4 @@ export default function UserAvatar({ dashboardPath = '/dashboard' }) {
     </div>
   )
 }
+

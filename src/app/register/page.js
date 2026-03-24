@@ -1,48 +1,73 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { getSupabaseClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { getErrorMessage, logError } from '@/lib/errorHandler'
+import { getSpecializations } from '@/lib/db'
+import DEFAULT_SPECIALIZATIONS from '@/lib/specializations'
 
 export default function RegisterPage() {
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = getSupabaseClient()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState('patient')
   const [specialization, setSpecialization] = useState('')
+  const [specializationsList, setSpecializationsList] = useState(DEFAULT_SPECIALIZATIONS)
+  const [loadingSpecializations, setLoadingSpecializations] = useState(false)
   const [degree, setDegree] = useState('')
   const [experience_years, setExperienceYears] = useState('')
   const [consultation_fee, setConsultationFee] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sessionChecked, setSessionChecked] = useState(false)
 
   useEffect(() => {
-    const checkSession = async () => {
+    // Pre-select role from query param
+    const params = new URLSearchParams(window.location.search)
+    const qRole = params.get('role')
+    if (qRole === 'doctor') setRole('doctor')
+  }, [])
+
+  // If already logged in, silently redirect (non-blocking — form shows immediately)
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        const userRole = session.user.user_metadata?.role || 'patient'
+        if (userRole === 'admin') router.replace('/admin-dashboard')
+        else if (userRole === 'doctor') router.replace('/doctor-dashboard')
+        else router.replace('/patient-dashboard')
+      }
+    }).catch(() => {})
+  }, [router])
+
+  useEffect(() => {
+    const loadSpecializations = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession()
-        if (session?.user) {
-          // User is already logged in - redirect to dashboard
-          // Get role from JWT metadata (no DB query)
-          const userRole = session.user.user_metadata?.role || 'patient'
-          if (userRole === 'admin') router.replace('/admin-dashboard')
-          else if (userRole === 'doctor') router.replace('/doctor-dashboard')
-          else router.replace('/patient-dashboard')
-          return
+        setLoadingSpecializations(true)
+        const { data: specs, error } = await getSpecializations()
+        if (error) {
+          console.warn('[Register] could not load specializations:', error)
+          setSpecializationsList(DEFAULT_SPECIALIZATIONS)
+        } else if (specs && specs.length > 0) {
+          setSpecializationsList(specs)
+        } else {
+          setSpecializationsList(DEFAULT_SPECIALIZATIONS)
         }
       } catch (err) {
-        console.error('[Register] Session check error:', err)
+        console.warn('[Register] loadSpecializations error:', err)
+        setSpecializationsList(DEFAULT_SPECIALIZATIONS)
+      } finally {
+        setLoadingSpecializations(false)
       }
-      setSessionChecked(true)
     }
-    checkSession()
-  }, [router])
+
+    loadSpecializations()
+  }, [])
 
   const handleRegister = async (e) => {
     e.preventDefault()
@@ -67,7 +92,7 @@ export default function RegisterPage() {
 
     // Validate doctor-specific fields if registering as doctor
     if (role === 'doctor') {
-      if (!specialization || specialization === 'Select specialization') {
+      if (!specialization) {
         setError('Please select a specialization')
         return
       }
@@ -152,8 +177,6 @@ export default function RegisterPage() {
 
             if (doctorError) {
               console.warn('[Register] Doctor profile creation failed:', doctorError)
-            } else {
-              console.log('[Register] Doctor profile created')
             }
           } catch (err) {
             console.warn('[Register] Doctor profile creation error:', err)
@@ -165,8 +188,7 @@ export default function RegisterPage() {
 
       // Determine redirect URL
       let redirectTo = '/patient-dashboard'
-      if (role === 'admin') redirectTo = '/admin-dashboard'
-      else if (role === 'doctor') redirectTo = '/doctor-dashboard'
+      if (role === 'doctor') redirectTo = '/doctor-dashboard'
 
       // Instant redirect (no delay) - middleware will confirm auth
       router.replace(redirectTo)
@@ -183,21 +205,24 @@ export default function RegisterPage() {
       className="min-h-screen flex items-center justify-center bg-cover bg-center px-4 py-6 relative"
       style={{ backgroundImage: "url('/Screenshot%202026-02-07%20192826.png')" }}
     >
-      <div className="absolute inset-0 bg-black/30 pointer-events-none"></div>
-      <div className="w-full max-w-md bg-white/95 p-8 rounded-2xl shadow-lg border border-gray-200 max-h-screen overflow-y-auto backdrop-blur-sm relative z-10">
+      <div className="absolute inset-0 bg-slate/20 pointer-events-none"></div>
+      <div className="w-full max-w-md bg-linear-to-br from-teal-500/50 to-blue-900/30 p-8 rounded-2xl shadow-lg border border-gray-200 max-h-screen overflow-y-auto backdrop-blur-sm relative z-10">
+        <div className="mb-4">
+          <button onClick={() => router.push('/login')} className="text-teal-600 font-semibold hover:text-teal-700">
+            ← Back to Login
+          </button>
+        </div>
         <div className="text-center mb-8">
           <div className="w-12 h-12 bg-linear-to-br from-teal-500 to-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <span className="text-white text-xl">♥</span>
           </div>
-          <h1 className="text-2xl font-bold mb-2 text-teal-700">
-            {role === 'patient' ? 'Patient Registration' : role === 'doctor' ? 'Doctor Registration' : 'Admin Registration'}
+          <h1 className="text-3xl font-semibold mb-2 text-white-600">
+            {role === 'patient' ? 'Patient Registration' : 'Doctor Registration'}
           </h1>
           <p className="text-gray-700 text-sm">
             {role === 'patient' 
               ? 'Register to book appointments with top doctors' 
-              : role === 'doctor'
-              ? 'Register as a doctor to start seeing patients'
-              : 'Register as an administrator'}
+              : 'Register as a doctor to start seeing patients'}
           </p>
         </div>
 
@@ -223,7 +248,6 @@ export default function RegisterPage() {
             >
               <option value="patient">Patient</option>
               <option value="doctor">Doctor</option>
-              <option value="admin">Admin</option>
             </select>
           </div>
 
@@ -233,7 +257,7 @@ export default function RegisterPage() {
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              placeholder="John Doe"
+              placeholder="Enter Name"
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
               required
             />
@@ -245,7 +269,7 @@ export default function RegisterPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="john@example.com"
+              placeholder="@gmail.com"
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
               required
             />
@@ -285,16 +309,10 @@ export default function RegisterPage() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
                   required
                 >
-                  <option value="">Select specialization</option>
-                  <option value="General Physician">General Physician</option>
-                  <option value="Cardiology">Cardiology</option>
-                  <option value="Dermatology">Dermatology</option>
-                  <option value="Neurology">Neurology</option>
-                  <option value="Orthopedic">Orthopedic</option>
-                  <option value="Pediatrics">Pediatrics</option>
-                  <option value="Gynecology">Gynecology</option>
-                  <option value="Dentistry">Dentistry</option>
-                  <option value="Ophthalmology">Ophthalmology</option>
+                  <option value="">{loadingSpecializations ? 'Loading specializations...' : 'Select specialization'}</option>
+                  {specializationsList.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -303,8 +321,8 @@ export default function RegisterPage() {
                   type="text"
                   value={degree}
                   onChange={(e) => setDegree(e.target.value)}
-                  placeholder="MBBS, MD"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
+                  placeholder="eg.MBBS, MD"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-600"
                   required
                 />
               </div>
@@ -315,21 +333,21 @@ export default function RegisterPage() {
                     type="number"
                     value={experience_years}
                     onChange={(e) => setExperienceYears(e.target.value)}
-                    placeholder="5"
+                    placeholder="eg., 1,2,3..."
                     min="0"
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-2 text-gray-900">Consultation Fee ($)</label>
+                  <label className="block text-sm font-semibold mb-2 text-gray-900">Consultation Fee</label>
                   <input
                     type="number"
                     value={consultation_fee}
                     onChange={(e) => setConsultationFee(e.target.value)}
-                    placeholder="50"
+                    placeholder="Rs."
                     min="0"
-                    step="0.01"
+                    step="01"
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-gray-900 placeholder-gray-900"
                     required
                   />
@@ -347,9 +365,9 @@ export default function RegisterPage() {
           </button>
         </form>
 
-        <div className="mt-6 text-center text-gray-600 text-sm">
+        <div className="mt-7 text-center text-gray-900 text-md">
           Already have an account?{' '}
-          <Link href="/login" className="text-teal-600 hover:text-teal-700 font-semibold">
+          <Link href="/login" className="text-white hover:text-white font-semibold">
             Sign in here
           </Link>
         </div>
@@ -357,3 +375,4 @@ export default function RegisterPage() {
     </div>
   )
 }
+

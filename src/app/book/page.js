@@ -1,16 +1,17 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { logError, getErrorMessage } from '@/lib/errorHandler'
-import { getDoctors, getSpecializations, getDoctorsBySpecialization } from '@/lib/db'
+import DEFAULT_SPECIALIZATIONS from '@/lib/specializations'
 
 export default function BookAppointmentPage() {
   const router = useRouter()
-  const supabase = getSupabaseClient()
+  const supabaseRef = useRef(getSupabaseClient())
+  const supabase = supabaseRef.current
   const [doctors, setDoctors] = useState([])
-  const [specializations, setSpecializations] = useState([])
+  const [specializations, setSpecializations] = useState(DEFAULT_SPECIALIZATIONS)
   const [selectedSpecialization, setSelectedSpecialization] = useState('')
   const [selectedDoctorId, setSelectedDoctorId] = useState('')
   const [selectedDate, setSelectedDate] = useState('')
@@ -19,7 +20,7 @@ export default function BookAppointmentPage() {
   const [reason, setReason] = useState('')
   const [consultationMode, setConsultationMode] = useState('in-person')
   const [loading, setLoading] = useState(false)
-  const [loadingSpecializations, setLoadingSpecializations] = useState(true)
+  const [loadingSpecializations, setLoadingSpecializations] = useState(false)
   const [loadingDoctors, setLoadingDoctors] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -27,7 +28,10 @@ export default function BookAppointmentPage() {
   // user info (must be logged in)
   const [userName, setUserName] = useState('')
   const [userEmail, setUserEmail] = useState('')
+  const [userPhone, setUserPhone] = useState('')
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [sessionUser, setSessionUser] = useState(null)
+  const [useAccountDetails, setUseAccountDetails] = useState(false)
 
   // Guest info (when not authenticated)
   const [guestName, setGuestName] = useState('')
@@ -38,172 +42,94 @@ export default function BookAppointmentPage() {
   const [minDate, setMinDate] = useState('')
   const [maxDate, setMaxDate] = useState('')
 
-  // Initialize date constraints on component mount
+  // Single effect: session check first, then data loads sequentially.
+  // Running them in the same effect prevents concurrent navigator.locks contention
+  // that causes AbortError and stuck loading states.
   useEffect(() => {
-    // Load session if present; guests are allowed (no redirect)
-    const ensureSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (session?.user) {
-        setIsAuthenticated(true)
-        setUserName(session.user.user_metadata?.full_name || '')
-        setUserEmail(session.user.email || '')
-      } else {
-        setIsAuthenticated(false)
-      }
-    }
-    ensureSession()
+    const init = async () => {
+      // ── Date constraints (synchronous) ──────────────────────────────────
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      setMinDate(tomorrow.toISOString().split('T')[0])
+      const sixtyDaysLater = new Date()
+      sixtyDaysLater.setDate(sixtyDaysLater.getDate() + 60)
+      setMaxDate(sixtyDaysLater.toISOString().split('T')[0])
 
-    const tomorrow = new Date()
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const tomorrowStr = tomorrow.toISOString().split('T')[0]
-    setMinDate(tomorrowStr)
-
-    const sixtyDaysLater = new Date()
-    sixtyDaysLater.setDate(sixtyDaysLater.getDate() + 60)
-    const maxDateStr = sixtyDaysLater.toISOString().split('T')[0]
-    setMaxDate(maxDateStr)
-  }, [])
-
-  // Load specializations and doctors in separate effects
-  useEffect(() => {
-    const loadSpecializations = async () => {
+      // ── Session check (auth, uses singleton + navigator.locks) ───────────
       try {
-        setLoadingSpecializations(true)
-        
-        // Fetch specializations from database
-        const { data: specs, error: specsError } = await getSpecializations()
-
-        if (specsError) {
-          // If the fetch was aborted, ignore the error (navigation/unmount)
-          if (specsError?.name === 'AbortError' || String(specsError).includes('signal is aborted')) {
-            return
-          }
-          logError('Failed to load specializations from database', specsError)
-          // Use fallback specializations
-          setSpecializations(['Cardiology', 'Neurology', 'Dermatology', 'General Practice', 'Orthopedics'])
-        } else if (specs && specs.length > 0) {
-          setSpecializations(specs)
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session?.user) {
+          setIsAuthenticated(true)
+          setSessionUser(session.user)
+          // Fetch phone with the same client after the session call resolves
+          try {
+            const { data: ext } = await supabase
+              .from('users_extended')
+              .select('phone')
+              .eq('id', session.user.id)
+              .single()
+            if (ext?.phone) session.user._cachedPhone = ext.phone
+          } catch (_) {}
         } else {
-          // Fallback specializations
-          setSpecializations(['Cardiology', 'Neurology', 'Dermatology', 'General Practice', 'Orthopedics'])
+          setIsAuthenticated(false)
+          setSessionUser(null)
         }
+      } catch (authErr) {
+        if (
+          authErr?.name !== 'AbortError' &&
+          !String(authErr).toLowerCase().includes('signal is aborted')
+        ) {
+          console.warn('[BookPage] session check error:', authErr)
+        }
+        setIsAuthenticated(false)
+        setSessionUser(null)
+      }
+
+      // ── Specializations (via API route – avoids auth lock contention) ────
+      setLoadingSpecializations(true)
+      try {
+        const res = await fetch('/api/doctors', { method: 'POST' })
+        const json = await res.json()
+        const specs = json.specializations || []
+        setSpecializations(specs.length > 0 ? specs : DEFAULT_SPECIALIZATIONS)
       } catch (err) {
-        // Ignore abort errors
-        if (err?.name === 'AbortError' || String(err).includes('signal is aborted')) {
-          return
-        }
-        console.warn('Using fallback specializations:', getErrorMessage(err))
-        setSpecializations(['Cardiology', 'Neurology', 'Dermatology', 'General Practice', 'Orthopedics'])
+        console.warn('[BookPage] Error loading specializations:', err)
+        setSpecializations(DEFAULT_SPECIALIZATIONS)
       } finally {
         setLoadingSpecializations(false)
       }
     }
 
-    loadSpecializations()
+    init()
   }, [])
 
   useEffect(() => {
     const loadDoctors = async () => {
+      if (!selectedSpecialization) {
+        setDoctors([])
+        return
+      }
+
       try {
         setLoadingDoctors(true)
+        setDoctors([])
 
-        // If a specialization is selected, fetch doctors for that specialization
-        if (selectedSpecialization) {
-          const { data, error: fetchError } = await getDoctorsBySpecialization(selectedSpecialization)
+        // Use the API route (service-role key) to avoid auth lock contention
+        const res = await fetch(
+          `/api/doctors?specialization=${encodeURIComponent(selectedSpecialization)}`
+        )
+        const json = await res.json()
 
-          if (fetchError) {
-            // If the fetch was aborted, ignore the error (navigation/unmount)
-            if (fetchError?.name === 'AbortError' || String(fetchError).includes('signal is aborted')) {
-              return
-            }
-            logError('Failed to load doctors from database', fetchError)
-            throw new Error('Unable to load doctor list')
-          }
-
-          if (data && data.length > 0) {
-            setDoctors(data)
-          } else {
-            setDoctors([])
-          }
-        } else {
-          // Use the dedicated db utility which has proper RLS setup
-          const { data, error: fetchError } = await getDoctors()
-
-          if (fetchError) {
-            // If the fetch was aborted, ignore the error (navigation/unmount)
-            if (fetchError?.name === 'AbortError' || String(fetchError).includes('signal is aborted')) {
-              return
-            }
-            logError('Failed to load doctors from database', fetchError)
-            throw new Error('Unable to load doctor list')
-          }
-
-          if (data && data.length > 0) {
-            setDoctors(data)
-          } else {
-            // Fallback: use mock doctors
-            console.warn('No doctors found in database, using mock data')
-            setDoctors([
-              {
-                id: 'mock-1',
-                full_name: 'Dr. Sarah Johnson',
-                specialization: 'Cardiology',
-                experience_years: 10,
-                consultation_fee: 50,
-                rating: 4.8
-              },
-              {
-                id: 'mock-2',
-                full_name: 'Dr. Michael Chen',
-                specialization: 'Neurology',
-                experience_years: 15,
-                consultation_fee: 60,
-                rating: 4.9
-              },
-              {
-                id: 'mock-3',
-                full_name: 'Dr. Emily Davis',
-                specialization: 'Dermatology',
-                experience_years: 8,
-                consultation_fee: 45,
-                rating: 4.7
-              }
-            ])
-          }
-        }
-      } catch (err) {
-        // Ignore abort errors (component unmounted / route change)
-        if (err?.name === 'AbortError' || String(err).includes('signal is aborted')) {
+        if (!res.ok) {
+          console.error('[BookPage] Failed to load doctors:', json.error)
+          setDoctors([])
           return
         }
-        // Use mock doctors as fallback
-        console.warn('Using fallback mock doctors:', getErrorMessage(err))
-        setDoctors([
-          {
-            id: 'mock-1',
-            full_name: 'Dr. Sarah Johnson',
-            specialization: 'Cardiology',
-            experience_years: 10,
-            consultation_fee: 50,
-            rating: 4.8
-          },
-          {
-            id: 'mock-2',
-            full_name: 'Dr. Michael Chen',
-            specialization: 'Neurology',
-            experience_years: 15,
-            consultation_fee: 60,
-            rating: 4.9
-          },
-          {
-            id: 'mock-3',
-            full_name: 'Dr. Emily Davis',
-            specialization: 'Dermatology',
-            experience_years: 8,
-            consultation_fee: 45,
-            rating: 4.7
-          }
-        ])
+
+        setDoctors(json.doctors || [])
+      } catch (err) {
+        console.error('[BookPage] Error loading doctors:', err)
+        setDoctors([])
       } finally {
         setLoadingDoctors(false)
       }
@@ -232,27 +158,33 @@ export default function BookAppointmentPage() {
         const patientId = session.user.id
         const response = await fetch('/api/appointments', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             patient_id: patientId,
             doctor_id: selectedDoctorId,
-            appointment_date: `${selectedDate}T${selectedTime}:00Z`,
+            appointment_date: selectedDate,
+            appointment_time: selectedTime,
             notes: reason,
-            consultation_mode: consultationMode,
+            patient_name: isAuthenticated ? userName : null,
           }),
         })
 
-        const data = await response.json()
-
-        if (!response.ok) {
-          throw new Error(data.error || 'Failed to book appointment')
+        let data
+        try {
+          data = await response.json()
+        } catch (e) {
+          const text = await response.text().catch(() => '')
+          throw new Error(text || 'Failed to book appointment')
         }
 
-        setSuccess('✓ Appointment booked successfully!')
+        if (!response.ok) {
+          // include server response for easier debugging
+          throw new Error(data?.error || JSON.stringify(data) || 'Failed to book appointment')
+        }
+
+        setSuccess('✓ Appointment booked successfully! Redirecting to your dashboard...')
         setTimeout(() => {
-          router.push('/')
+          router.push('/patient-dashboard')
         }, 1500)
       } else {
         // Guest booking flow
@@ -279,18 +211,30 @@ export default function BookAppointmentPage() {
           }),
         })
 
-        const data = await response.json()
-
-        if (!response.ok) {
-          throw new Error(data.error || 'Failed to book appointment')
+        let data
+        try {
+          data = await response.json()
+        } catch (e) {
+          const text = await response.text().catch(() => '')
+          throw new Error(text || 'Failed to book appointment')
         }
 
-        setSuccess('✓ Appointment booked successfully! Confirmation sent to your email.')
+        if (!response.ok) {
+          throw new Error(data?.error || JSON.stringify(data) || 'Failed to book appointment')
+        }
+
+        setSuccess('✓ Appointment booked successfully! Redirecting to your bookings...')
         setTimeout(() => {
-          router.push('/')
+          router.push('/dashboard')
         }, 1500)
       }
     } catch (err) {
+      // Ignore abort errors from concurrent auth lock contention – not a user-visible error
+      if (err?.name === 'AbortError' || String(err).toLowerCase().includes('signal is aborted')) {
+        console.info('[BookPage] request aborted, ignoring')
+        setLoading(false)
+        return
+      }
       logError('Booking error', err)
       setError(getErrorMessage(err) || 'Failed to book appointment. Please try again.')
     } finally {
@@ -312,18 +256,18 @@ export default function BookAppointmentPage() {
       {/* Navbar */}
       <nav className="flex justify-between items-center px-6 md:px-12 py-4 bg-white border-b border-gray-200 sticky top-0 z-40">
         <button
-          onClick={() => router.back()}
+          onClick={() => router.push('/')}
           className="text-teal-600 font-semibold hover:text-teal-700"
         >
           ← Back
         </button>
-        <h1 className="text-2xl font-bold text-gray-900">Book Appointment</h1>
-        <div className="w-20"></div>
+        <h1 className="text-3xl font-bold text-teal-400">Appointment Booking For Patients</h1>
+        <div className="w-00"></div>
       </nav>
 
       <div className="max-w-5xl mx-auto p-6 py-12">
-        <h2 className="text-4xl font-bold text-gray-900 mb-2">Book Your Appointment</h2>
-        <p className="text-gray-600 mb-8">No registration needed - fill in the form and get instant confirmation</p>
+        <h2 className="text-4xl font-bold text-violet-900 mb-2">Book Your Appointment Here</h2>
+        <p className="text-purple-800 mb-8"> Fill your details below and choose your preferred doctor and time slot in the form and get instant confirmation.</p>
 
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 p-4 rounded-lg mb-6">
@@ -345,23 +289,62 @@ export default function BookAppointmentPage() {
 
               {isAuthenticated ? (
                 <>
+                  <div className="flex items-center gap-3 mb-2">
+                    <input
+                      id="use-account"
+                      type="checkbox"
+                      checked={useAccountDetails}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setUseAccountDetails(checked)
+                        if (checked && sessionUser) {
+                          setUserName(sessionUser.user_metadata?.full_name || '')
+                          setUserEmail(sessionUser.email || '')
+                          setUserPhone(sessionUser._cachedPhone || '')
+                        } else {
+                          setUserName('')
+                          setUserEmail('')
+                          setUserPhone('')
+                        }
+                      }}
+                      className="w-4 h-4"
+                    />
+                    <label htmlFor="use-account" className="text-sm text-gray-700">Use my account details</label>
+                  </div>
+
                   <div>
-                    <label className="block text-sm font-semibold mb-2 text-gray-700">Full Name</label>
+                    <label className="block text-sm font-semibold mb-2 text-gray-700">Full Name *</label>
                     <input
                       type="text"
                       value={userName}
-                      readOnly
-                      className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700"
+                      onChange={(e) => setUserName(e.target.value)}
+                      placeholder="Your full name"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 text-gray-900"
+                      required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold mb-2 text-gray-700">Email</label>
+                    <label className="block text-sm font-semibold mb-2 text-gray-700">Email *</label>
                     <input
                       type="email"
                       value={userEmail}
-                      readOnly
-                      className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700"
+                      onChange={(e) => setUserEmail(e.target.value)}
+                      placeholder="user@example.com"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 text-gray-900"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold mb-2 text-gray-700">Phone Number *</label>
+                    <input
+                      type="tel"
+                      value={userPhone}
+                      onChange={(e) => setUserPhone(e.target.value)}
+                      placeholder="+91 00000-00000"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 text-gray-900"
+                      required
                     />
                   </div>
                 </>
@@ -373,7 +356,7 @@ export default function BookAppointmentPage() {
                       type="text"
                       value={guestName}
                       onChange={(e) => setGuestName(e.target.value)}
-                      placeholder="John Doe"
+                      placeholder="Type Your Name"
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200  text-gray-900"
                       required
                     />
@@ -385,7 +368,7 @@ export default function BookAppointmentPage() {
                       type="email"
                       value={guestEmail}
                       onChange={(e) => setGuestEmail(e.target.value)}
-                      placeholder="john@example.com"
+                      placeholder="user@gmail.com"
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200  text-gray-900"
                       required
                     />
@@ -397,7 +380,7 @@ export default function BookAppointmentPage() {
                       type="tel"
                       value={guestPhone}
                       onChange={(e) => setGuestPhone(e.target.value)}
-                      placeholder="+1 (555) 000-0000"
+                      placeholder="+91 00000-00000"
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 text-gray-900"
                       required
                     />
@@ -503,17 +486,15 @@ export default function BookAppointmentPage() {
                       ? '-- Select specialization first --'
                       : loadingDoctors
                       ? 'Loading doctors...'
+                      : doctors.length === 0
+                      ? '-- No doctors available --'
                       : '-- Select a doctor --'}
                   </option>
-                  {doctors.length > 0 ? (
-                    doctors.map((doctor) => (
-                      <option key={doctor.id} value={doctor.id}>
-                        Dr. {doctor.full_name} - {doctor.specialization}
-                      </option>
-                    ))
-                  ) : selectedSpecialization && !loadingDoctors ? (
-                    <option disabled>No doctors available for this specialization</option>
-                  ) : null}
+                  {doctors.map((doctor) => (
+                    <option key={doctor.id} value={doctor.id}>
+                      Dr. {doctor.full_name || 'Unknown'} - {doctor.specialization}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -527,7 +508,7 @@ export default function BookAppointmentPage() {
                     <span className="font-semibold">Experience:</span> {selectedDoctor.experience_years} years
                   </p>
                   <p className="text-sm text-gray-700 mb-2">
-                    <span className="font-semibold">Fee:</span> ${selectedDoctor.consultation_fee}
+                    <span className="font-semibold">Fee:</span> Rs.{selectedDoctor.consultation_fee}
                   </p>
                   <p className="text-sm text-gray-700">
                     <span className="font-semibold">Rating:</span> {selectedDoctor.rating ? `⭐ ${selectedDoctor.rating.toFixed(1)}/5` : 'N/A'}
@@ -606,7 +587,7 @@ export default function BookAppointmentPage() {
           <div className="mt-8 flex gap-4">
             <button
               type="button"
-              onClick={() => router.back()}
+              onClick={() => router.push('/')}
               className="px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-gray-400 transition"
             >
               Cancel
@@ -614,13 +595,18 @@ export default function BookAppointmentPage() {
             <button
               type="submit"
               disabled={
-                loading ||
-                !selectedDoctorId ||
-                !selectedDate ||
-                !selectedTime ||
-                !userName ||
-                !userEmail ||
-                !reason
+                (() => {
+                  // basic required fields for all bookings
+                  if (loading) return true
+                  if (!selectedDoctorId || !selectedDate || !selectedTime || !reason) return true
+
+                  // require user fields when authenticated, guest fields otherwise
+                  if (isAuthenticated) {
+                    return !userName || !userEmail || !userPhone
+                  }
+
+                  return !guestName || !guestEmail || !guestPhone
+                })()
               }
               className="flex-1 px-6 py-3 bg-linear-to-r from-teal-600 to-blue-600 text-white rounded-lg font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
@@ -630,12 +616,12 @@ export default function BookAppointmentPage() {
         </form>
 
         {/* Symptom Checker CTA */}
-        <div className="mt-8 p-6 bg-gradient-to-r from-teal-50 to-blue-50 border border-teal-200 rounded-xl text-center">
-          <p className="text-gray-700 mb-3 font-medium">Not sure what's wrong? Try our AI-powered symptom checker first.</p>
+        <div className="mt-8 p-6 bg-linear-to-r from-teal-50 to-blue-50 border border-teal-200 rounded-xl text-center">
+          <p className="text-gray-700 mb-3 font-medium">Not sure what&#39;s wrong? Try our AI-powered symptom checker first.</p>
           <button
             type="button"
             onClick={() => router.push('/symptom-checker')}
-            className="px-6 py-3 bg-gradient-to-r from-teal-600 to-blue-600 text-white rounded-lg font-semibold hover:opacity-90 transition"
+            className="px-6 py-3 bg-linear-to-r from-teal-600 to-blue-600 text-white rounded-lg font-semibold hover:opacity-90 transition"
           >
             🩺 Go to Symptom Checker
           </button>
@@ -644,3 +630,4 @@ export default function BookAppointmentPage() {
     </div>
   )
 }
+

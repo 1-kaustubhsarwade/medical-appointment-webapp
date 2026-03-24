@@ -13,3 +13,4 @@ export default supabase
 
 // Also provide the createClient function if needed
 export { createClient } from '@/lib/supabase/client'
+

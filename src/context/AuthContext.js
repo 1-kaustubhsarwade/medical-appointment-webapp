@@ -1,20 +1,35 @@
 'use client'
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabase/client'
-import { logError, getErrorMessage } from '@/lib/errorHandler'
+import { logError } from '@/lib/errorHandler'
 
 const AuthContext = createContext()
+
+/** Returns true when the error is a Supabase navigator.locks abort */
+function isAbortError(err) {
+  if (!err) return false
+  return (
+    err?.name === 'AbortError' ||
+    String(err?.message).toLowerCase().includes('signal is aborted') ||
+    String(err).toLowerCase().includes('signal is aborted')
+  )
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const supabase = getSupabaseClient()
+  // Prevent concurrent checkSession calls – they cause navigator.locks AbortErrors
+  const checkingRef = useRef(false)
 
   useEffect(() => {
     // Check current session
     const checkSession = async () => {
+      // Guard: skip if another check is already in flight
+      if (checkingRef.current) return
+      checkingRef.current = true
       try {
         const {
           data: { session },
@@ -25,7 +40,7 @@ export function AuthProvider({ children }) {
           // Fetch user profile
           const { data: profileData, error } = await supabase
             .from('users_extended')
-            .select('*')
+            .select('id, full_name, phone, role, created_at')
             .eq('id', session.user.id)
             .single()
 
@@ -39,15 +54,19 @@ export function AuthProvider({ children }) {
           }
         }
       } catch (error) {
-        console.error('Session check error:', error)
+        // Silently ignore lock-abort errors – they're harmless and caused by concurrency
+        if (!isAbortError(error)) {
+          console.error('Session check error:', error)
+        }
       } finally {
         setLoading(false)
+        checkingRef.current = false
       }
     }
 
     checkSession()
 
-    // Listen for auth changes
+    // Listen for auth changes (no cross-tab polling or focus handlers)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -55,19 +74,25 @@ export function AuthProvider({ children }) {
         setUser(session.user)
 
         // Fetch profile when user changes
-        const { data: profileData, error } = await supabase
-          .from('users_extended')
-          .select('*')
-          .eq('id', session.user.id)
-          .single()
+        try {
+          const { data: profileData, error } = await supabase
+            .from('users_extended')
+            .select('id, full_name, phone, role, created_at')
+            .eq('id', session.user.id)
+            .single()
 
-        if (error) {
-          // Non-blocking: Log but don't fail
-          if (error.code !== 'PGRST116') {
-            logError('Note: Could not load profile on auth change', error)
+          if (error) {
+            // Non-blocking: Log but don't fail
+            if (error.code !== 'PGRST116') {
+              logError('Note: Could not load profile on auth change', error)
+            }
+          } else if (profileData) {
+            setProfile(profileData)
           }
-        } else if (profileData) {
-          setProfile(profileData)
+        } catch (err) {
+          if (!isAbortError(err)) {
+            logError('Note: Could not load profile on auth change', err)
+          }
         }
       } else {
         setUser(null)
@@ -130,3 +155,4 @@ export function useAuth() {
   }
   return context
 }
+

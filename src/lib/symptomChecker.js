@@ -163,3 +163,4 @@ export const commonSymptoms = [
   'loss of appetite',
   'weakness'
 ]
+

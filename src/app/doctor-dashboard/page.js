@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
-import { getDoctorAppointments, updateAppointmentStatus } from '@/lib/db'
+import { getDoctorAppointments } from '@/lib/db'
 import UserAvatar from '@/components/UserAvatar'
+import RequireAuth from '@/components/RequireAuth'
 
 export default function DoctorDashboardPage() {
   const supabase = getSupabaseClient()
@@ -56,55 +57,56 @@ export default function DoctorDashboardPage() {
     fetchData()
   }, [])
 
+  const updateStatus = async (appointmentId, newStatus) => {
+    const res = await fetch('/api/appointments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: appointmentId, status: newStatus }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      console.error('[DoctorDashboard] Status update failed:', json.error)
+      setAppointmentError(`Failed to update appointment: ${json.error}`)
+      return false
+    }
+    setAppointmentError('')
+    return true
+  }
+
   const handleApprove = async (appointmentId) => {
-    const { error: updateError } = await updateAppointmentStatus(appointmentId, 'confirmed')
-    
-    if (!updateError) {
-      setAppointments(appointments.map(apt => 
+    const ok = await updateStatus(appointmentId, 'confirmed')
+    if (ok) {
+      setAppointments(appointments.map(apt =>
         apt.id === appointmentId ? { ...apt, status: 'confirmed' } : apt
       ))
-      setStats({
-        ...stats,
-        pending: stats.pending - 1,
-        confirmed: stats.confirmed + 1
-      })
+      setStats(prev => ({ ...prev, pending: prev.pending - 1, confirmed: prev.confirmed + 1 }))
     }
   }
 
   const handleReject = async (appointmentId) => {
-    if (confirm('Reject this appointment?')) {
-      const { error: updateError } = await updateAppointmentStatus(appointmentId, 'cancelled')
-      
-      if (!updateError) {
-        setAppointments(appointments.map(apt => 
-          apt.id === appointmentId ? { ...apt, status: 'cancelled' } : apt
-        ))
-        setStats({
-          ...stats,
-          pending: stats.pending - 1,
-        })
-      }
+    if (!confirm('Reject this appointment?')) return
+    const ok = await updateStatus(appointmentId, 'cancelled')
+    if (ok) {
+      setAppointments(appointments.map(apt =>
+        apt.id === appointmentId ? { ...apt, status: 'cancelled' } : apt
+      ))
+      setStats(prev => ({ ...prev, pending: prev.pending - 1 }))
     }
   }
 
   const handleComplete = async (appointmentId) => {
-    const { error: updateError } = await updateAppointmentStatus(appointmentId, 'completed')
-    
-    if (!updateError) {
-      setAppointments(appointments.map(apt => 
+    const ok = await updateStatus(appointmentId, 'completed')
+    if (ok) {
+      setAppointments(appointments.map(apt =>
         apt.id === appointmentId ? { ...apt, status: 'completed' } : apt
       ))
-      setStats({
-        ...stats,
-        confirmed: stats.confirmed - 1,
-        completed: stats.completed + 1
-      })
+      setStats(prev => ({ ...prev, confirmed: prev.confirmed - 1, completed: prev.completed + 1 }))
     }
   }
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    window.location.href = '/'
+    window.location.replace('/login')
   }
 
   const getStatusColor = (status) => {
@@ -123,6 +125,7 @@ export default function DoctorDashboardPage() {
   }
 
   return (
+    <RequireAuth>
     <div className="min-h-screen bg-linear-to-br from-blue-50 to-teal-50">
       {/* Navbar */}
       <nav className="flex justify-between items-center px-6 md:px-12 py-4 bg-white border-b border-gray-200 sticky top-0 z-40">
@@ -260,5 +263,7 @@ export default function DoctorDashboardPage() {
         </div>
       </div>
     </div>
+    </RequireAuth>
   )
 }
+

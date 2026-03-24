@@ -12,32 +12,25 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey)
 export async function POST(request) {
   try {
     const body = await request.json()
-    const { patient_id, doctor_id, appointment_date, notes } = body
+    console.log('[api/appointments] POST body:', body)
+    const { patient_id, doctor_id, appointment_date, appointment_time, notes } = body
 
     // Validate input
-    if (!patient_id || !doctor_id || !appointment_date) {
+    if (!patient_id || !doctor_id || !appointment_date || !appointment_time) {
       return Response.json(
-        { error: 'Missing required fields: patient_id, doctor_id, appointment_date' },
+        { error: 'Missing required fields: patient_id, doctor_id, appointment_date, appointment_time' },
         { status: 400 }
       )
     }
 
-    // Parse appointment date
-    const appointmentTime = new Date(appointment_date)
-    if (isNaN(appointmentTime.getTime())) {
-      return Response.json({ error: 'Invalid appointment_date format' }, { status: 400 })
-    }
-
-    // Check for conflicts (example: 30-minute appointment slots)
-    const appointmentEnd = new Date(appointmentTime.getTime() + 30 * 60000)
-
+    // Check for conflicts — same doctor, same date, same time slot
     const { data: conflicts, error: conflictError } = await supabase
       .from('appointments')
       .select('id')
       .eq('doctor_id', doctor_id)
-      .eq('status', 'scheduled')
-      .gte('appointment_date', appointmentTime.toISOString())
-      .lt('appointment_date', appointmentEnd.toISOString())
+      .eq('appointment_date', appointment_date)
+      .eq('appointment_time', appointment_time)
+      .in('status', ['pending', 'confirmed'])
 
     if (conflictError) {
       return Response.json({ error: conflictError.message }, { status: 500 })
@@ -45,7 +38,7 @@ export async function POST(request) {
 
     if (conflicts && conflicts.length > 0) {
       return Response.json(
-        { error: 'Doctor is not available at this time' },
+        { error: 'This time slot is already booked. Please choose another time.' },
         { status: 409 }
       )
     }
@@ -53,27 +46,24 @@ export async function POST(request) {
     // Create appointment
     const { data: appointment, error: appointmentError } = await supabase
       .from('appointments')
-      .insert([
-        {
-          patient_id,
-          doctor_id,
-          appointment_date: appointmentTime.toISOString(),
-          status: 'scheduled',
-          notes: notes || null,
-        },
-      ])
+      .insert([{
+        patient_id,
+        doctor_id,
+        appointment_date,
+        appointment_time,
+        status: 'pending',
+        notes: notes || null,
+      }])
       .select()
+      .single()
 
+    console.log('[api/appointments] insert result:', { appointment, appointmentError })
     if (appointmentError) {
       return Response.json({ error: appointmentError.message }, { status: 400 })
     }
 
     return Response.json(
-      {
-        success: true,
-        message: 'Appointment booked successfully',
-        appointment: appointment[0],
-      },
+      { success: true, message: 'Appointment booked successfully', appointment },
       { status: 201 }
     )
   } catch (error) {
@@ -115,3 +105,37 @@ export async function GET(request) {
     return Response.json({ error: error.message }, { status: 500 })
   }
 }
+
+export async function PATCH(request) {
+  try {
+    const body = await request.json()
+    const { id, status } = body
+
+    if (!id || !status) {
+      return Response.json({ error: 'Missing required fields: id, status' }, { status: 400 })
+    }
+
+    const allowed = ['pending', 'confirmed', 'completed', 'cancelled']
+    if (!allowed.includes(status)) {
+      return Response.json({ error: `Invalid status. Must be one of: ${allowed.join(', ')}` }, { status: 400 })
+    }
+
+    const { data, error } = await supabase
+      .from('appointments')
+      .update({ status })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[api/appointments] PATCH error:', error)
+      return Response.json({ error: error.message }, { status: 500 })
+    }
+
+    return Response.json({ success: true, appointment: data }, { status: 200 })
+  } catch (error) {
+    console.error('[api/appointments] PATCH exception:', error)
+    return Response.json({ error: error.message }, { status: 500 })
+  }
+}
+

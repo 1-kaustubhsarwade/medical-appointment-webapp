@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { getPatientAppointments, cancelAppointment } from '@/lib/db'
 import UserAvatar from '@/components/UserAvatar'
+import RequireAuth from '@/components/RequireAuth'
 
 export default function PatientDashboardPage() {
   const router = useRouter()
@@ -39,7 +40,7 @@ export default function PatientDashboardPage() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    window.location.href = '/'
+    window.location.replace('/login')
   }
 
   const getStatusColor = (status) => {
@@ -58,6 +59,7 @@ export default function PatientDashboardPage() {
   }
 
   return (
+    <RequireAuth>
     <div className="min-h-screen bg-linear-to-br from-blue-50 to-teal-50">
       {/* Navbar (aligned with Doctor Dashboard style) */}
       <nav className="flex justify-between items-center px-6 md:px-12 py-4 bg-white border-b border-gray-200 sticky top-0 z-40">
@@ -110,14 +112,14 @@ export default function PatientDashboardPage() {
                       <tr key={apt.id} className={idx % 2 === 0 ? 'bg-gray-50' : ''}>
                         <td className="px-6 py-4 text-gray-900">
                           <div>
-                            <p className="font-semibold">{apt.doctor?.users_extended?.full_name || 'Dr. Unknown'}</p>
+                            <p className="font-semibold">Dr. {apt.doctor?.full_name || 'Unknown'}</p>
                             <p className="text-xs text-gray-500">{apt.doctor?.specialization}</p>
                           </div>
                         </td>
                         <td className="px-6 py-4 text-gray-700 text-sm">
                           {new Date(apt.appointment_date).toLocaleDateString()} {apt.appointment_time}
                         </td>
-                        <td className="px-6 py-4 text-gray-700 text-sm">{apt.reason_for_visit}</td>
+                        <td className="px-6 py-4 text-gray-700 text-sm">{apt.notes}</td>
                         <td className="px-6 py-4">
                           <span className={`px-3 py-1 rounded text-xs font-semibold ${getStatusColor(apt.status)}`}>
                             {apt.status?.charAt(0).toUpperCase() + (apt.status?.slice(1) || '')}
@@ -146,7 +148,7 @@ export default function PatientDashboardPage() {
         <div className="grid grid-cols-1 gap-4">
           <button
             onClick={() => router.push('/book')}
-            className="bg-gradient-to-r from-teal-500 to-blue-600 p-6 rounded-2xl shadow-sm border border-teal-300 hover:shadow-md transition transform hover:scale-105 active:scale-95"
+            className="bg-linear-to-r from-teal-500 to-blue-600 p-6 rounded-2xl shadow-sm border border-teal-300 hover:shadow-md transition transform hover:scale-105 active:scale-95"
           >
             <div className="flex items-center justify-between">
               <div className="text-left">
@@ -159,5 +161,7 @@ export default function PatientDashboardPage() {
         </div>
       </div>
     </div>
+    </RequireAuth>
   )
 }
+

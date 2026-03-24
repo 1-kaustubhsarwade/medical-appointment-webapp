@@ -14,7 +14,7 @@ export default function Home() {
           <div className="w-10 h-10 bg-linear-to-br from-teal-500 to-blue-600 rounded-lg flex items-center justify-center">
             <span className="text-white font-bold text-lg">♥</span>
           </div>
-          <h1 className="text-2xl font-bold text-teal-600">MEDBOOK</h1>
+          <h1 className="text-2xl font-bold text-teal-600">MEDIBOOK</h1>
         </div>
         <Link
           href="/login"
@@ -39,6 +39,12 @@ export default function Home() {
               className="px-6 py-3 bg-teal-600 text-white rounded-lg font-semibold hover:bg-teal-700 transition"
             >
               Book Appointment
+            </button>
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="px-6 py-3 bg-teal-600 border border-teal-700 text-white rounded-lg font-semibold hover:bg-teal-700 transition"
+            >
+              Track Guest Booking
             </button>
           </div>
 
@@ -181,28 +187,28 @@ export default function Home() {
             <div>
               <h4 className="font-bold mb-4">For Patients</h4>
               <ul className="space-y-2 text-gray-600 text-sm">
-                <li><a href="#" className="hover:text-teal-600">Find Doctors</a></li>
-                <li><a href="#" className="hover:text-teal-600">Book Appointment</a></li>
-                <li><a href="#" className="hover:text-teal-600">AI Symptom Checker</a></li>
-                <li><a href="#" className="hover:text-teal-600">Prescriptions</a></li>
+                <li><a href="/book" className="hover:text-teal-600">Find Doctors</a></li>
+                <li><a href="/book" className="hover:text-teal-600">Book Appointment</a></li>
+                <li><a href="/symptom-checker" className="hover:text-teal-600">AI Symptom Checker</a></li>
+                <li><a href="/login" className="hover:text-teal-600">Prescriptions</a></li>
               </ul>
             </div>
             <div>
               <h4 className="font-bold mb-4">For Doctors</h4>
               <ul className="space-y-2 text-gray-600 text-sm">
-                <li><a href="#" className="hover:text-teal-600">Register as Doctor</a></li>
-                <li><a href="#" className="hover:text-teal-600">Manage Appointments</a></li>
-                <li><a href="#" className="hover:text-teal-600">Patient Records</a></li>
-                <li><a href="#" className="hover:text-teal-600">Earnings</a></li>
+                <li><a href="/register" className="hover:text-teal-600">Register as Doctor</a></li>
+                <li><a href="/doctor-login" className="hover:text-teal-600">Manage Appointments</a></li>
+                <li><a href="/dashboard" className="hover:text-teal-600">Patient Records</a></li>
+                <li><a href="/login" className="hover:text-teal-600">Login as Doctor</a></li>
               </ul>
             </div>
             <div>
               <h4 className="font-bold mb-4">Support</h4>
               <ul className="space-y-2 text-gray-600 text-sm">
                 <li><a href="#" className="hover:text-teal-600">Help Center</a></li>
-                <li><a href="#" className="hover:text-teal-600">Contact Us</a></li>
-                <li><a href="#" className="hover:text-teal-600">Privacy Policy</a></li>
-                <li><a href="#" className="hover:text-teal-600">Terms of Service</a></li>
+                <li><a href="#" className="hover:text-teal-600">Contact Us at:</a></li>
+                <li><a href="#" className="hover:text-blue-600">+91 204-12345678</a></li>
+                <li><a href="#" className="hover:text-red-600">medibook1@gmail.com</a></li>
               </ul>
             </div>
           </div>
@@ -214,3 +220,4 @@ export default function Home() {
     </main>
   );
 }
+

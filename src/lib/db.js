@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { getErrorMessage } from './errorHandler'
 
 // ============ DOCTOR UTILITIES ============
 
@@ -45,7 +46,6 @@ export async function getSpecializations() {
     const { data: doctorsData, error } = await supabase
       .from('doctors')
       .select('specialization')
-      .eq('is_active', true)
 
     if (error) {
       return { data: null, error }
@@ -77,7 +77,6 @@ export async function getDoctorsBySpecialization(specialization) {
       .from('doctors')
       .select('*')
       .eq('specialization', specialization)
-      .eq('is_active', true)
 
     if (doctorsError) {
       return { data: null, error: doctorsError }
@@ -221,8 +220,10 @@ export async function getPatientAppointments(patientId) {
     .select(`
       *,
       doctor:doctor_id(
-        *,
-        users_extended:id(full_name)
+        id,
+        full_name,
+        specialization,
+        consultation_fee
       )
     `)
     .eq('patient_id', patientId)
@@ -233,25 +234,54 @@ export async function getPatientAppointments(patientId) {
 
 export async function getDoctorAppointments(doctorId) {
   try {
-    const { data, error } = await supabase
+    // Fetch appointments without relying on PostgREST embedded relationships
+    const { data: appts, error } = await supabase
       .from('appointments')
-      .select(`
-        *,
-        patient:patient_id(
-          *,
-          users_extended:id(full_name, phone)
-        )
-      `)
+      .select('*')
       .eq('doctor_id', doctorId)
       .order('appointment_date', { ascending: true })
 
     if (error) {
-      console.error('[getDoctorAppointments] Query error:', error)
-    } else {
-      console.log('[getDoctorAppointments] Fetched appointments for doctor:', doctorId, 'Count:', data?.length || 0, 'Data:', data)
+      console.error('[getDoctorAppointments] Query error:', getErrorMessage(error), error)
+      return { data: null, error }
     }
 
-    return { data, error }
+    if (!appts || appts.length === 0) {
+      console.log('[getDoctorAppointments] No appointments found for doctor:', doctorId)
+      return { data: [], error: null }
+    }
+
+    // Collect patient IDs and fetch their extended profiles
+    const patientIds = Array.from(new Set(appts.map(a => a.patient_id).filter(Boolean)))
+    let userExtData = []
+    if (patientIds.length > 0) {
+      const { data: uData, error: uErr } = await supabase
+        .from('users_extended')
+        .select('id, full_name, phone')
+        .in('id', patientIds)
+
+      if (uErr) {
+        console.warn('[getDoctorAppointments] Could not fetch users_extended for patients:', getErrorMessage(uErr))
+      } else {
+        userExtData = uData || []
+      }
+    }
+
+    const userMap = userExtData.reduce((acc, u) => {
+      acc[u.id] = u
+      return acc
+    }, {})
+
+    const enriched = appts.map(a => ({
+      ...a,
+      patient: {
+        id: a.patient_id,
+        users_extended: userMap[a.patient_id] || null
+      }
+    }))
+
+    console.log('[getDoctorAppointments] Fetched appointments for doctor:', doctorId, 'Count:', enriched.length)
+    return { data: enriched, error: null }
   } catch (err) {
     console.error('[getDoctorAppointments] Exception:', err)
     return { data: null, error: err }
@@ -261,7 +291,7 @@ export async function getDoctorAppointments(doctorId) {
 export async function updateAppointmentStatus(appointmentId, status) {
   const { data, error } = await supabase
     .from('appointments')
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({ status })
     .eq('id', appointmentId)
     .select()
 
@@ -348,3 +378,27 @@ export async function getAllUsers() {
 
   return { data, error }
 }
+
+export async function getAdminUser() {
+  try {
+    const { data, error } = await supabase
+      .from('users_extended')
+      .select('*')
+      .eq('role', 'admin')
+      .limit(1)
+
+    if (error) return { data: null, error }
+    if (!data || data.length === 0) return { data: null, error: null }
+
+    return { data: data[0], error: null }
+  } catch (err) {
+    // If the `role` column doesn't exist in users_extended, treat as "unknown" rather than erroring.
+    const msg = getErrorMessage(err)
+    if (String(msg).toLowerCase().includes('role') && String(msg).toLowerCase().includes('does not exist')) {
+      console.warn('[getAdminUser] role column missing in users_extended; cannot determine admin user from DB')
+      return { data: null, error: null }
+    }
+    return { data: null, error: err }
+  }
+}
+

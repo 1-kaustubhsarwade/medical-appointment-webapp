@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { getSupabaseClient } from '@/lib/supabase/client'
 
 export default function CheckEmailContent() {
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = getSupabaseClient()
   const searchParams = useSearchParams()
   const [status, setStatus] = useState('checking')
   const [message, setMessage] = useState('Checking email confirmation...')
@@ -19,22 +19,21 @@ export default function CheckEmailContent() {
         setStatus('confirmed')
         setMessage('Email confirmed! Redirecting to dashboard...')
         
-        // Get user role
-        const { data: userExt } = await supabase
-          .from('users_extended')
-          .select('role')
-          .eq('id', session.user.id)
-          .single()
+        // Determine role from metadata first, then DB
+        let role = session.user.user_metadata?.role || 'patient'
+        try {
+          const { data: userExt } = await supabase
+            .from('users_extended')
+            .select('role')
+            .eq('id', session.user.id)
+            .single()
+          if (userExt?.role) role = userExt.role
+        } catch (_) {}
 
-        // Redirect based on role
         setTimeout(() => {
-          if (userExt?.role === 'doctor') {
-            router.push('/doctor-dashboard')
-          } else if (userExt?.role === 'admin') {
-            router.push('/admin-dashboard')
-          } else {
-            router.push('/dashboard')
-          }
+          if (role === 'doctor') router.push('/doctor-dashboard')
+          else if (role === 'admin') router.push('/admin-dashboard')
+          else router.push('/patient-dashboard')
         }, 2000)
       } else {
         setStatus('pending')
@@ -81,3 +80,4 @@ export default function CheckEmailContent() {
     </div>
   )
 }
+

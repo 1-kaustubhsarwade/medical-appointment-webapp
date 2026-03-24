@@ -57,8 +57,15 @@ export function logError(context, error) {
       return
     }
 
-    // Some platforms throw an AbortError with name 'AbortError'
-    if (error.name === 'AbortError' || String(error).includes('signal is aborted')) {
+    // Detect abort/timeout errors across different platforms and shapes
+    const lower = (str) => (typeof str === 'string' ? str.toLowerCase() : '')
+    const msg = error?.message || ''
+    if (
+      error?.name === 'AbortError' ||
+      lower(msg).includes('abort') ||
+      lower(String(error)).includes('signal is aborted') ||
+      lower(String(error)).includes('aborted')
+    ) {
       // Use info so it's visible in development without marking as an error
       console.info(`${context}: request aborted`) 
       return
@@ -71,3 +78,4 @@ export function logError(context, error) {
     console.error(`${context}: error while logging error`, logErr)
   }
 }
+
